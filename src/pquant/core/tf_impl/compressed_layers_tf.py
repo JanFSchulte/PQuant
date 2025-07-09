@@ -1,7 +1,7 @@
 import keras
 from hgq.quantizer import Quantizer
 from keras import ops
-from keras.api.layers import (
+from keras.layers import (
     Activation,
     Conv1D,
     Conv2D,
