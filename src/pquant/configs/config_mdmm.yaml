@@ -11,7 +11,7 @@ pruning_parameters:
   target_sparsity: 0.9
   rf: 1
   epsilon: 1.0e-03
-  scale: 10.0
+  scale: 0.0
   damping: 1.0
   use_grad: false 
   l0_mode: "coarse" # 'coarse' or 'smooth'
