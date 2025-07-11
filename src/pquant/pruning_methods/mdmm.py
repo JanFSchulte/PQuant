@@ -23,7 +23,7 @@ def flip_gradient(x, scale=-1.0):
 # Abstract base class for constraints
 @keras.utils.register_keras_serializable(name = "Constraint")
 class Constraint(keras.layers.Layer):
-    def __init__(self, lmbda_init=1.0,scale=1.0, damping=1.0, **kwargs):
+    def __init__(self, lmbda_init=0.0,scale=1.0, damping=1.0, **kwargs):
         self.use_grad_ = bool(kwargs.pop("use_grad", True))
         self.lr_ = float(kwargs.pop("lr", 0.0))
         super().__init__(**kwargs)
