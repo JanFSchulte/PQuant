@@ -107,7 +107,8 @@ class EqualityConstraint(Constraint):
     def get_infeasibility(self, weight):
         metric_value = self.metric_fn(weight)
         infeasibility = metric_value - self.target_value
-        return ops.abs(infeasibility)
+        # return ops.abs(infeasibility)
+        return infeasibility
     
 @keras.utils.register_keras_serializable(name = "LessThanOrEqualConstraint")
 class LessThanOrEqualConstraint(Constraint):
