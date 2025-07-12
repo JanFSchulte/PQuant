@@ -75,7 +75,7 @@ def CreateModel(shape, output=8):
     hidden = 16
     hidden_dimx=shape[0]
     hidden_dimy=shape[1]
-    x_base = x_in = Input(shape, name="input_pxls/")
+    x_base = x_in = Input(shape, name="input_pxls")
     stack = mlp_encoder_network(x_base, hidden, hidden_dimx, hidden_dimy,)
     stack = var_network(stack, hidden=16, output=output) # this network should only be used with 'slim' (3) or 'diagonal' (8) regression targets
     model = Model(inputs=x_in, outputs=stack, name="smrtpxl_regression")
