@@ -33,23 +33,6 @@ class CSVLogger(Callback):
             )
         return False                      
 
-class ModelCheckpoint(Callback):
-    """Snapshot best validation loss only."""
-    def __init__(self, path="best_weights.h5"):
-        self.path = Path(path).expanduser().resolve()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.best = np.inf
-
-    def on_epoch_end(self, _epoch, _tr, val_loss, model):
-        val = _to_float(val_loss)
-        if val is not None and val < self.best:
-            self.best = val
-            # Create a temporary file path that Keras will accept
-            tmp_path = self.path.parent / f".{self.path.name}.tmp"
-            model.save_weights(str(tmp_path))
-            os.replace(tmp_path, self.path)
-        return False
-
 class EpochCheckpoint(Callback):
     """Save weights *every* epoch as <dir>/<prefix>_epochXXXXXX.h5."""
     def __init__(self, directory, prefix="weights"):
