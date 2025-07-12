@@ -57,10 +57,8 @@ class EpochCheckpoint(Callback):
         self.prefix = prefix
 
     def on_epoch_end(self, epoch, *_args):
-        target = self.dir / f"{self.prefix}_epoch{epoch:06d}.h5"
-        tmp    = target.with_suffix(".tmp")
-        _args[-1].save_weights(tmp)             
-        os.replace(tmp, target)
+        filename = f"{self.prefix}_epoch{epoch:06d}.weights.h5" 
+        _args[-1].save_weights(str(self.dir / filename), overwrite=True)
         return False
 
 class EarlyStopping(Callback):
