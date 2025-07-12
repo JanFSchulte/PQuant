@@ -9,7 +9,6 @@ def var_network(var, hidden=10, output=2):
         hidden,
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
-        name="dense_1"
     )(var)
 
     var = Activation("tanh", name="activation_tanh_2")(var)
@@ -17,14 +16,12 @@ def var_network(var, hidden=10, output=2):
         hidden,
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
         activity_regularizer=tf.keras.regularizers.L2(0.01),
-        name="dense_2"
     )(var)
     var = Activation("tanh", name="activation_tanh_3")(var)
     
     var = Dense(
         output,
         kernel_regularizer=tf.keras.regularizers.L1L2(0.01),
-        name="dense_3"
     )(var)
     return var
 
