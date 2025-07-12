@@ -2,7 +2,7 @@
 
 pruning_parameters:
   pruning_method: mdmm
-  enable_pruning: false
+  enable_pruning: true
   disable_pruning_for_layers:
     - 
   constraint_type: "Equality"
