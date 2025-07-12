@@ -11,7 +11,7 @@ pruning_parameters:
   target_sparsity: 0.9
   rf: 1
   epsilon: 1.0e-03
-  scale: 1.0
+  scale: 10.0
   damping: 1.0
   use_grad: false 
   l0_mode: "coarse" # 'coarse' or 'smooth'
@@ -28,7 +28,7 @@ quantization_parameters:
   use_symmetric_quantization: false
 
 training_parameters:
-  epochs: 200
+  epochs: 1000
   fine_tuning_epochs: 30
   pretraining_epochs: 0
   pruning_first: false
