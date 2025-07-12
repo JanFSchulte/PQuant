@@ -30,4 +30,4 @@ def custom_loss(y, p_base, minval=1e-9, maxval=1e9, scale = 512):
 
     NLL = -1*tf.math.log(likelihood)
 
-    return tf.keras.backend.sum(NLL) 2
+    return tf.keras.backend.sum(NLL)
