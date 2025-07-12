@@ -3,21 +3,26 @@ import os
 import gc
 import math
 import glob
-import random
 import logging
-import datetime
 import numpy as np
 import pandas as pd
 import json
 
 from typing import Union, List, Tuple, Dict, Any
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 import tensorflow as tf
-from qkeras import quantized_bits
 
-import utils
+import shutil
+from pathlib import Path
+
+def safe_remove_directory(directory_path):
+    if Path(directory_path).exists():
+        print(f"Directory {directory_path} is removed...")
+        shutil.rmtree(directory_path)
+    else:
+        print(f"Directory {directory_path} does not exist and cannot be removed.")
 
 class OptimizedDataGenerator(tf.keras.utils.Sequence):
     def __init__(self, 
