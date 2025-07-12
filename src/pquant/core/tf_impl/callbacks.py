@@ -44,9 +44,10 @@ class ModelCheckpoint(Callback):
         val = _to_float(val_loss)
         if val is not None and val < self.best:
             self.best = val
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            model.save_weights(tmp)
-            os.replace(tmp, self.path)
+            # Create a temporary file path that Keras will accept
+            tmp_path = self.path.parent / f".{self.path.name}.tmp"
+            model.save_weights(str(tmp_path))
+            os.replace(tmp_path, self.path)
         return False
 
 class EpochCheckpoint(Callback):
