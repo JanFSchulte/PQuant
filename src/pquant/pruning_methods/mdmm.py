@@ -198,27 +198,105 @@ class UnstructuredSparsityMetric:
             
         return fn_value
 
-class StructuredSparsityMetric:
-    """Calculates the ratio of near-zero weight groups (based on Reuse Factor: rf)."""
-    def __init__(self, rf=1, epsilon=1e-3):
+class FPGAAwareSparsityMetric:
+    def __init__(self, rf=1,  precision=16, target_resource='DSP', bram_width=36, epsilon=1e-3):
+        assert target_resource in ['DSP', 'BRAM'], "target_resource must be 'DSP' or 'BRAM'."
         self.rf = rf
+        self.precision = precision
+        self.target_resource = target_resource
+        self.bram_width = bram_width
         self.epsilon = epsilon
-    
-    def __call__(self, weight):
+        
+        self.c = None
+        self.built = False
+        self.build()
+        
+    def build(self):
+        self.c = self._calculate_c()
+        self.built = True
+        
+    def _calculate_c(self):
+        """Calculates 'C', the number of consecutive DSP groups that are packed into a single BRAM block"""
+        if self.bram_width % self.precision == 0:
+            return self.bram_width // self.precision
+        else:
+            return (2 * self.bram_width) // self.precision
+        
+    def _prepare_weights(self, weight):
+        """
+        Reshapes and pads the weight tensor to align with the Reuse Factor (RF).
+        => Makes the tensor divisible into DSP-sized groups.
+        """
         original_shape = weight.shape
-        w_reshaped = ops.reshape(weight, (original_shape[0], -1))
-        num_weights = ops.shape(w_reshaped)[1]
+        # For mulit-dim lyers (eg. Conv2D) => Flatten
+        if len(original_shape) > 2:
+            weight_reshaped = ops.reshape(weight, (original_shape[0], -1))
+        else:
+            weight_reshaped = weight
+            
+        num_weights = ops.shape(weight_reshaped)[1]
+        padding_needed = (self.rf - num_weights % self.rf) % self.rf
+        weight_padded = ops.pad(weight_reshaped, [[0, 0], [0, padding_needed]])
+
+        return weight_padded
+    
         
-        padding = (self.rf - num_weights % self.rf) % self.rf
-        w_padded = ops.pad(w_reshaped, [[0, 0], [0, padding]])
+    def call(self, weight):
+        if not self.built:
+            self.build()
         
-        groups = ops.reshape(w_padded, (original_shape[0], -1, self.rf))
-        group_norms = ops.sqrt(ops.sum(ops.square(groups), axis=-1))
-        zero_groups = ops.less_equal(group_norms, self.epsilon)
+        prepared_weights = self._prepare_weights(weight)
+        dsp_groups = ops.reshape(prepared_weights, (prepared_weights.shape[0], -1, self.rf))
+        
+        if self.target_resource == 'DSP':
+            return self._calculate_dsp_sparsity(dsp_groups)
+        elif self.target_resource == 'BRAM':
+            return self._calculate_bram_sparsity(dsp_groups)
+
+    def _calculate_dsp_sparsity(self, dsp_groups):
+        """
+        Calculates sparsity at the DSP level.
+
+        A DSP block is considered "pruned" if the L2-norm of the weight group
+        it processes is below the epsilon threshold.
+        """
+        group_norms = ops.sqrt(ops.sum(ops.square(dsp_groups), axis=-1)) # Calculate the L2 norm for each DSP group
+        zero_groups = ops.less_equal(group_norms, self.epsilon) # Identify which groups are effectively zero
         num_groups = ops.cast(ops.size(group_norms), "float32")
-        
+
+        # Return the fraction of pruned groups
         return ops.sum(ops.cast(zero_groups, "float32")) / num_groups
 
+    def _calculate_bram_sparsity(self, dsp_groups):
+        """
+        Calculates sparsity at the BRAM level.
+
+        This involves further grouping the DSP-level structures into BRAM-sized
+        [cite_start]chunks before calculating the norm[cite: 178]. A BRAM block is "pruned" if the norm
+        of all weights stored within it is below the epsilon threshold.
+        """
+        # Further group the DSP structures into BRAM-sized chunks
+        num_dsp_groups = ops.shape(dsp_groups)[1]
+        bram_padding = (self.c - num_dsp_groups % self.c) % self.c
+        dsp_groups_padded = ops.pad(dsp_groups, [[0, 0], [0, bram_padding], [0, 0]])
+        bram_groups = ops.reshape(dsp_groups_padded, (dsp_groups.shape[0], -1, self.c, self.rf))
+
+        # Calculate the L2 norm for each BRAM group
+        bram_group_norms = ops.sqrt(ops.sum(ops.square(bram_groups), axis=(-1, -2)))
+        zero_bram_groups = ops.less_equal(bram_group_norms, self.epsilon)
+        num_bram_groups = ops.cast(ops.size(bram_group_norms), "float32")
+        return ops.sum(ops.cast(zero_bram_groups, "float32")) / num_bram_groups
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 #-------------------------------------------------------------------
 #                   MDMM Layer
 #-------------------------------------------------------------------
