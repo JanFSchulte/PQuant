@@ -241,7 +241,7 @@ class FPGAAwareSparsityMetric:
         return weight_padded
     
         
-    def call(self, weight):
+    def __call__(self, weight):
         if not self.built:
             self.build()
         
@@ -258,7 +258,7 @@ class FPGAAwareSparsityMetric:
         Calculates sparsity at the DSP level.
 
         A DSP block is considered "pruned" if the L2-norm of the weight group
-        it processes is below the epsilon threshold.
+        it processes is below the 'epsilon' threshold.
         """
         group_norms = ops.sqrt(ops.sum(ops.square(dsp_groups), axis=-1)) # Calculate the L2 norm for each DSP group
         zero_groups = ops.less_equal(group_norms, self.epsilon) # Identify which groups are effectively zero
@@ -272,8 +272,8 @@ class FPGAAwareSparsityMetric:
         Calculates sparsity at the BRAM level.
 
         This involves further grouping the DSP-level structures into BRAM-sized
-        [cite_start]chunks before calculating the norm[cite: 178]. A BRAM block is "pruned" if the norm
-        of all weights stored within it is below the epsilon threshold.
+        chunks before calculating the norm. A BRAM block is "pruned" if the norm
+        of all weights stored within it is below the 'epsilon' threshold.
         """
         # Further group the DSP structures into BRAM-sized chunks
         num_dsp_groups = ops.shape(dsp_groups)[1]
@@ -289,7 +289,104 @@ class FPGAAwareSparsityMetric:
 
     
     
+class PACAPatternMetric:
+    # TODO: 
+    # Make the loss contniuous ...not boolean mask usage instead think of a way to use the vake of the weighst and tehir distance
+    # In the finetuning step we will make the maks freeze and have the model train with the frozen patterns
+    def __init__(self, num_patterns_to_keep=16, epsilon=1e-3):
+        """Initializes the PatternPruning manager."""
+        self.num_patterns_to_keep = num_patterns_to_keep
+        self.epsilon = epsilon
+        self.pattern_mask = None # Lazily initialized
     
+    def __call__(self, weight):
+        # Ensure this is a convolutional layer; otherwise, do nothing.
+        if len(weight.shape) != 4:
+            raise ValueError("PACAPatternMetric can only be used with convolutional layers.")
+        
+        binary_patterns_flat = self._get_binary_patterns(weight, flattened=True)
+        
+        dominant_patterns = self._select_dominant_patterns(binary_patterns_flat, self.num_patterns_to_keep)
+        pattern_mask = self._create_mask(weight, binary_patterns_flat, dominant_patterns)
+        metric_dist = self.pattern_distance_metric(weight, pattern_mask)
+        
+        return metric_dist
+      
+    def _get_binary_patterns(self, weight, flattened=True):
+        binary_patterns = ops.cast(ops.abs(weight) > self.epsilon, "float32")
+        if flattened:
+            original_shape = weight.shape 
+            patterns_flat = ops.reshape(binary_patterns, (original_shape[0], -1))
+            return patterns_flat
+        return binary_patterns
+    
+    def _select_dominant_patterns(self, patterns_flat, num_patterns_to_keep):
+        pattern_counts = self._count_patterns(patterns_flat)
+        # Sort patterns by count and take the top 'num_patterns_to_keep'
+        sorted_patterns = sorted(pattern_counts.items(), key=lambda item: item[1], reverse=True)
+        num_dominant_patterns = min(num_patterns_to_keep, len(sorted_patterns))
+        dominant_patterns = [p[0] for p in sorted_patterns[:num_dominant_patterns]]
+        dominant_patterns_tensor = ops.convert_to_tensor(dominant_patterns, dtype="float32")
+        
+        return dominant_patterns_tensor
+    
+    def _count_patters_ops(self, patterns_flat):
+        unique_patterns, indices = ops.unique(patterns_flat, axis=0)
+        ones = ops.ones_like(indices, dtype="int32")
+        counts = ops.unsorted_segment_sum(data=ones, segment_ids=indices, 
+                                          num_segments=ops.shape(unique_patterns)[0])
+        # Make dicqtionary
+        counts = dict(zip(unique_patterns, counts))
+        
+        return counts
+    
+    def _count_patterns(self, patterns_flat):
+        """Counts unique patterns in a backend-agnostic way."""
+        unique_patterns = ops.unique(patterns_flat)
+        # TODO: Implement this in optimized way
+        patterns_np = patterns_flat.numpy()
+        pattern_counts = {}
+        for p in patterns_np:
+            pattern_tuple = tuple(p)
+            pattern_counts[pattern_tuple] = pattern_counts.get(pattern_tuple, 0) + 1
+        return pattern_counts
+    
+    def _create_mask(self, weight, binary_patterns_flat, dominant_patterns):
+        """
+        Discovers the most frequent patterns and creates a hardware-agnostic mask.
+        This is the core of the pattern selection process.
+        """
+        # Ensure this is a convolutional layer; otherwise, do nothing.
+        if len(weight.shape) != 4:
+            self.pattern_mask = ops.ones_like(weight)
+            return
+
+        original_shape = weight.shape
+
+        matches = ops.equal(ops.expand_dims(binary_patterns_flat, 1), 
+                                dominant_patterns)
+        is_match_per_dominant = ops.all(matches, axis=-1)
+        is_dominant_kernel = ops.any(is_match_per_dominant, axis=1)
+
+        mask_flat = ops.cast(is_dominant_kernel, dtype=weight.dtype)
+        mask_reshaped = ops.reshape(mask_flat, (original_shape[0], 1, 1, 1))
+        self.pattern_mask = ops.tile(mask_reshaped, [1, original_shape[1], original_shape[2], original_shape[3]])
+
+        return self.pattern_mask
+    def apply_mask(self, weight):
+        """Applies the hard pattern mask during the final fine-tuning step.."""
+        if self.pattern_mask is None:
+            self._create_mask(weight)
+        return weight * self.pattern_mask
+    
+    def pattern_distance_metric(self, weight, pattern_mask, method="l1"):
+        """Calculates the L1 norm of weights that are outside the allowed patterns."""
+        unwanted_weights = weight * (1 - self.pattern_mask)
+        if method == "l1":
+            return ops.sum(ops.abs(unwanted_weights))
+        elif method == "l2":
+            return ops.sqrt(ops.sum(ops.square(unwanted_weights)))
+
     
     
     
