@@ -199,7 +199,8 @@ class UnstructuredSparsityMetric:
         return fn_value
 
 class FPGAAwareSparsityMetric:
-    def __init__(self, rf=1,  precision=16, target_resource='DSP', bram_width=36, epsilon=1e-3):
+    def __init__(self, rf=1,  precision=16, target_resource='DSP', 
+                 bram_width=36, epsilon=1e-3):
         assert target_resource in ['DSP', 'BRAM'], "target_resource must be 'DSP' or 'BRAM'."
         self.rf = rf
         self.precision = precision
@@ -207,13 +208,8 @@ class FPGAAwareSparsityMetric:
         self.bram_width = bram_width
         self.epsilon = epsilon
         
-        self.c = None
-        self.built = False
-        self.build()
-        
-    def build(self):
         self.c = self._calculate_c()
-        self.built = True
+
         
     def _calculate_c(self):
         """Calculates 'C', the number of consecutive DSP groups that are packed into a single BRAM block"""
@@ -242,8 +238,6 @@ class FPGAAwareSparsityMetric:
     
         
     def __call__(self, weight):
-        if not self.built:
-            self.build()
         
         prepared_weights = self._prepare_weights(weight)
         dsp_groups = ops.reshape(prepared_weights, (prepared_weights.shape[0], -1, self.rf))
@@ -265,7 +259,7 @@ class FPGAAwareSparsityMetric:
         num_groups = ops.cast(ops.size(group_norms), "float32")
 
         # Return the fraction of pruned groups
-        return ops.sum(ops.cast(zero_groups, "float32")) / num_groups
+        return ops.sum(ops.cast(zero_groups, "float32")) / num_groups # TODO Align with some target
 
     def _calculate_bram_sparsity(self, dsp_groups):
         """
@@ -293,103 +287,146 @@ class PACAPatternMetric:
     # TODO: 
     # Make the loss contniuous ...not boolean mask usage instead think of a way to use the vake of the weighst and tehir distance
     # In the finetuning step we will make the maks freeze and have the model train with the frozen patterns
-    def __init__(self, num_patterns_to_keep=16, epsilon=1e-3):
+    def __init__(self, num_patterns_to_keep=16, beta=0.75, distance_metric='valued_hamming'):
         """Initializes the PatternPruning manager."""
-        self.num_patterns_to_keep = num_patterns_to_keep
-        self.epsilon = epsilon
-        self.pattern_mask = None # Lazily initialized
-    
-    def __call__(self, weight):
-        # Ensure this is a convolutional layer; otherwise, do nothing.
-        if len(weight.shape) != 4:
-            raise ValueError("PACAPatternMetric can only be used with convolutional layers.")
+        self.alpha = num_patterns_to_keep
+        self.beta = beta
+        self.distance_metric = distance_metric
+        self.dominant_patterns = None # Lazily initialized
+        self.projection_mask = None # used for finetuning (freezing pattern to dominant pattern by closest dist)
         
-        binary_patterns_flat = self._get_binary_patterns(weight, flattened=True)
+    def _get_patterns_from_weights(self, w):
+        """Gets the binary mask (pattern) of non-zero weights in each kernel."""
+        # Implements the T(.) function from the PACA paper.
+        w_reshaped = ops.reshape(w, (-1, ops.shape(w)[-2], ops.shape(w)[-1]))
+        patterns = ops.cast(ops.not_equal(w_reshaped, 0.0), dtype=w.dtype)
+        return ops.reshape(patterns, (-1, ops.shape(w)[-2] * ops.shape(w)[-1]))
+
         
-        dominant_patterns = self._select_dominant_patterns(binary_patterns_flat, self.num_patterns_to_keep)
-        pattern_mask = self._create_mask(weight, binary_patterns_flat, dominant_patterns)
-        metric_dist = self.pattern_distance_metric(weight, pattern_mask)
-        
-        return metric_dist
-      
-    def _get_binary_patterns(self, weight, flattened=True):
-        binary_patterns = ops.cast(ops.abs(weight) > self.epsilon, "float32")
-        if flattened:
-            original_shape = weight.shape 
-            patterns_flat = ops.reshape(binary_patterns, (original_shape[0], -1))
-            return patterns_flat
-        return binary_patterns
+    def _get_unique_patterns_with_counts(self, all_patterns):
+        """Returns the unique patterns and their counts using unique int hashes."""
+        if ops.shape(all_patterns)[0] == 0:
+            return ops.convert_to_tensor([], dtype=all_patterns.dtype), ops.convert_to_tensor([], dtype='int32')
+
+        # Create integer hashes for each pattern for efficient unique counting.
+        num_bits = ops.shape(all_patterns)[1]
+        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=all_patterns.dtype))
+        hashes = ops.sum(all_patterns * powers_of_2, axis=1)
+
+        # Sort hashes to group identical patterns, then find unique hashes and their counts.
+        sorted_hashes, sorted_indices = ops.sort(hashes), ops.argsort(hashes)
+        sorted_patterns = ops.gather(all_patterns, sorted_indices)
+
+        is_different = ops.not_equal(sorted_hashes[:-1], sorted_hashes[1:])
+        is_different_padded = ops.pad(is_different, [[0, 1]], constant_values=True)
+        boundary_indices = ops.cast(ops.where(is_different_padded), dtype="int32")
+        boundary_indices_flat = ops.reshape(boundary_indices, [-1])
+
+        # The first pattern of each unique group gives us the unique patterns.
+        unique_patterns = ops.gather(sorted_patterns, boundary_indices_flat)
+
+        # Calculate counts by finding the difference between boundary indices.
+        counts_padded = ops.pad(boundary_indices_flat, [[1, 0]], constant_values=-1)
+        counts = boundary_indices_flat - counts_padded[1:]
+
+        return unique_patterns, counts
+
     
-    def _select_dominant_patterns(self, patterns_flat, num_patterns_to_keep):
-        pattern_counts = self._count_patterns(patterns_flat)
-        # Sort patterns by count and take the top 'num_patterns_to_keep'
-        sorted_patterns = sorted(pattern_counts.items(), key=lambda item: item[1], reverse=True)
-        num_dominant_patterns = min(num_patterns_to_keep, len(sorted_patterns))
-        dominant_patterns = [p[0] for p in sorted_patterns[:num_dominant_patterns]]
-        dominant_patterns_tensor = ops.convert_to_tensor(dominant_patterns, dtype="float32")
-        
-        return dominant_patterns_tensor
-    
-    def _count_patters_ops(self, patterns_flat):
-        unique_patterns, indices = ops.unique(patterns_flat, axis=0)
-        ones = ops.ones_like(indices, dtype="int32")
-        counts = ops.unsorted_segment_sum(data=ones, segment_ids=indices, 
-                                          num_segments=ops.shape(unique_patterns)[0])
-        # Make dicqtionary
-        counts = dict(zip(unique_patterns, counts))
-        
-        return counts
-    
-    def _count_patterns(self, patterns_flat):
-        """Counts unique patterns in a backend-agnostic way."""
-        unique_patterns = ops.unique(patterns_flat)
-        # TODO: Implement this in optimized way
-        patterns_np = patterns_flat.numpy()
-        pattern_counts = {}
-        for p in patterns_np:
-            pattern_tuple = tuple(p)
-            pattern_counts[pattern_tuple] = pattern_counts.get(pattern_tuple, 0) + 1
-        return pattern_counts
-    
-    def _create_mask(self, weight, binary_patterns_flat, dominant_patterns):
+    def _select_dominant_patterns(self, w):
         """
-        Discovers the most frequent patterns and creates a hardware-agnostic mask.
-        This is the core of the pattern selection process.
+        Implements the "PDF-aware pattern set formulation" from the PACA paper.
+        This selects the most important patterns based on their frequency and a cumulative probability threshold.
+        (based on the 'alpha' and 'beta' hyperparameters)
         """
-        # Ensure this is a convolutional layer; otherwise, do nothing.
-        if len(weight.shape) != 4:
-            self.pattern_mask = ops.ones_like(weight)
+        all_patterns = self._get_patterns_from_weights(w)
+
+        # Get unique patterns and their frequencies from the new helper function.
+        unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
+        
+        if ops.shape(unique_patterns)[0] == 0:
+            self.dominant_patterns = unique_patterns
             return
 
-        original_shape = weight.shape
+        # Calculate PDF and select top patterns based on alpha and beta.
+        total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
+        pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
+        sorted_indices_pdf = ops.argsort(pdf, direction='DESCENDING')
+        sorted_pdf = ops.gather(pdf, sorted_indices_pdf)
+        sorted_unique_patterns = ops.gather(unique_patterns, sorted_indices_pdf)
 
-        matches = ops.equal(ops.expand_dims(binary_patterns_flat, 1), 
-                                dominant_patterns)
-        is_match_per_dominant = ops.all(matches, axis=-1)
-        is_dominant_kernel = ops.any(is_match_per_dominant, axis=1)
+        cdf = ops.cumsum(sorted_pdf)
+        n_beta_raw = ops.where(cdf >= self.beta)
+        if ops.shape(n_beta_raw)[1] == 0:
+            n_beta = ops.shape(cdf)[0]
+        else:
+            n_beta = n_beta_raw[0][0] + 1
 
-        mask_flat = ops.cast(is_dominant_kernel, dtype=weight.dtype)
-        mask_reshaped = ops.reshape(mask_flat, (original_shape[0], 1, 1, 1))
-        self.pattern_mask = ops.tile(mask_reshaped, [1, original_shape[1], original_shape[2], original_shape[3]])
+        num_to_keep = ops.minimum(ops.cast(n_beta, dtype='int32'), self.alpha)
+        self.dominant_patterns = sorted_unique_patterns[:num_to_keep]
+    
+    def _pattern_distances(self, w):
+        """
+        Calculates the distance of all kernels to the set of dominant patterns using one of the
+        three distance functions from the PACA paper.
+        """
+        # TODO to "Make the loss continuous...use the value of the weights and their distance".
+        if self.dominant_patterns is None:
+            raise ValueError("Dominant patterns have not been selected yet.")
 
-        return self.pattern_mask
-    def apply_mask(self, weight):
-        """Applies the hard pattern mask during the final fine-tuning step.."""
-        if self.pattern_mask is None:
-            self._create_mask(weight)
-        return weight * self.pattern_mask
-    
-    def pattern_distance_metric(self, weight, pattern_mask, method="l1"):
-        """Calculates the L1 norm of weights that are outside the allowed patterns."""
-        unwanted_weights = weight * (1 - self.pattern_mask)
-        if method == "l1":
-            return ops.sum(ops.abs(unwanted_weights))
-        elif method == "l2":
-            return ops.sqrt(ops.sum(ops.square(unwanted_weights)))
+        w_patterns = self._get_patterns_from_weights(w)
+        w_kernels = ops.reshape(w, (-1, ops.shape(w)[-2] * ops.shape(w)[-1]))
+        w_kernels_exp = ops.expand_dims(w_kernels, 1)
+        w_patterns_exp = ops.expand_dims(w_patterns, 1)
+        dom_patterns_exp = ops.expand_dims(self.dominant_patterns, 0)
 
+        if self.distance_metric == 'hamming':
+            distances = ops.sum(ops.abs(dom_patterns_exp - w_patterns_exp), axis=-1)
+        elif self.distance_metric == 'valued_hamming':
+            abs_diff = ops.abs(dom_patterns_exp - w_patterns_exp)
+            distances = ops.sum(abs_diff * ops.abs(w_kernels_exp), axis=-1)
+        elif self.distance_metric == 'cosine':
+            projected_kernels = w_kernels_exp * dom_patterns_exp
+            k_dot_projected = ops.sum(w_kernels_exp * projected_kernels, axis=-1)
+            norm_k = ops.norm(w_kernels_exp, axis=-1)
+            norm_projected = ops.norm(projected_kernels, axis=-1)
+            cosine_similarity = k_dot_projected / (norm_k * norm_projected + keras.backend.epsilon())
+            distances = 1.0 - cosine_similarity
+        else:
+            raise ValueError("Unsupported distance metric. Choose 'hamming', 'valued_hamming', or 'cosine'.")
+
+        return distances
+
+    def __call__(self, weight):
+        # This method focuses solely on calculating the penalty.
+        # The fine-tuning logic (applying the mask) is handled by the `MDMM` layer, which will call
+        # `freeze_patterns` at the appropriate time. This separation of concerns is better design.
+        if len(weight.shape) != 4:
+            # For non-conv layers, return zero loss.
+            return ops.convert_to_tensor(0.0, dtype=weight.dtype)
+
+        self._select_dominant_patterns(weight)
+        distances = self._pattern_distances(weight)
+        min_distances = ops.min(distances, axis=1)
+        return ops.sum(min_distances)
+
+    def apply_projection_mask(self, weight):
+        """
+        Finds the closest pattern for each kernel and creates a new weight tensor 
+        where each kernel's structure conforms to its assigned dominant pattern.
+        "Distance-Based Pattern Projection" from the PACA paper.
+        """
+        if self.dominant_patterns is None:
+            raise ValueError("Dominant patterns have not been selected yet.")
+
+        distances = self._pattern_distances(weight)
+        closest_indices = ops.argmin(distances, axis=1)
+        closest_patterns_flat = ops.gather(self.dominant_patterns, closest_indices)
     
-    
-    
+        original_shape = ops.shape(weight)
+        mask = ops.reshape(closest_patterns_flat, (original_shape[0], original_shape[1], original_shape[2], -1))
+
+        # Project the original weights onto the new pattern mask
+        return weight * mask
     
     
     
@@ -403,6 +440,7 @@ class MDMM(keras.layers.Layer):
         super().__init__(*args, **kwargs)
         self.config = config
         self.layer_type = layer_type
+        self.metric_fn = None
         self.constraint_layer = None
         self.penalty_loss = None
         self.built = False
@@ -412,21 +450,33 @@ class MDMM(keras.layers.Layer):
         metric_type = self.config["pruning_parameters"].get("metric_type", "UnstructuredSparsity")
         constraint_type = self.config["pruning_parameters"].get("constraint_type", "GreaterThanOrEqual")
         target_value = self.config["pruning_parameters"].get("target_value", 0.0)
-        target_sparsity = self.config["pruning_parameters"].get("target_sparsity", 0.9)
-        l0_mode = self.config["pruning_parameters"].get("l0_mode", "coarse")
-        scale_mode = self.config["pruning_parameters"].get("scale_mode", "mean")
-        
         
         if metric_type == "UnstructuredSparsity":
-            metric_fn = UnstructuredSparsityMetric(epsilon=self.config["pruning_parameters"].get("epsilon", 1e-5),
-                                                   target_sparsity=target_sparsity, l0_mode=l0_mode, scale_mode=scale_mode)
-        elif metric_type == "StructuredSparsity":
-            metric_fn = StructuredSparsityMetric(rf=self.config["rf"], epsilon=self.config["pruning_parameters"].get("epsilon", 1e-5))
+            self.metric_fn = UnstructuredSparsityMetric(
+                epsilon=self.config["pruning_parameters"].get("epsilon", 1e-5),
+                target_sparsity=self.config["pruning_parameters"].get("target_sparsity", 0.9),
+                l0_mode=self.config["pruning_parameters"].get("l0_mode", "coarse"),
+                scale_mode=self.config["pruning_parameters"].get("scale_mode", "mean")
+            )
+        elif metric_type == "FPGAAwareSparsity":
+            self.metric_fn = FPGAAwareSparsityMetric(
+                rf=self.config["pruning_parameters"].get("rf", 1),
+                precision=self.config["pruning_parameters"].get("precision", 16),
+                target_resource=self.config["pruning_parameters"].get("target_resource", "DSP")
+            )
+        elif metric_type == "PACAPatternSparsity":
+            constraint_type = "Equality"
+            target_value = 0.0
+            self.metric_fn = PACAPatternMetric(
+                num_patterns_to_keep=self.config["pruning_parameters"].get("num_patterns_to_keep", 16),
+                beta=self.config["pruning_parameters"].get("beta", 0.75),
+                distance_metric=self.config["pruning_parameters"].get("distance_metric", "valued_hamming")
+            )
         else:
             raise ValueError(f"Unknown metric_type: {metric_type}")
 
         common_args = {
-            "metric_fn": metric_fn,
+            "metric_fn": self.metric_fn,
             "target_value": target_value,
             "scale": self.config["pruning_parameters"].get("scale", 1.0),
             "damping": self.config["pruning_parameters"].get("damping", 1.0),
@@ -454,7 +504,10 @@ class MDMM(keras.layers.Layer):
         
         if self.is_finetuning:
             self.penalty_loss = 0.0
-            weight = weight * self.get_hard_mask(weight)
+            if isinstance(self.metric_fn, PACAPatternMetric):
+                weight = self.metric_fn.apply_projection_mask(weight)
+            else:
+                weight = weight * self.get_hard_mask(weight)
         else:
             self.penalty_loss = self.constraint_layer(weight)
 
