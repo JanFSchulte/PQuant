@@ -311,7 +311,8 @@ class PACAPatternMetric:
         # Create integer hashes for each pattern for efficient unique counting.
         num_bits = ops.shape(all_patterns)[1]
         device = all_patterns.device
-        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=all_patterns.dtype, device=device))
+        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=all_patterns.dtype)).to(device)
+
         
         hashes = ops.sum(all_patterns * powers_of_2, axis=1)
 
