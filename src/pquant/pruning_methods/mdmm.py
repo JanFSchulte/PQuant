@@ -350,7 +350,8 @@ class PACAPatternMetric:
         # Calculate PDF and select top patterns based on alpha and beta.
         total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
         pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
-        sorted_indices_pdf = ops.argsort(pdf, direction='DESCENDING')
+        sorted_indices_pdf_asc = ops.argsort(pdf)
+        sorted_indices_pdf = ops.flip(sorted_indices_pdf_asc, axis=0) # Sort in descending order
         sorted_pdf = pdf[sorted_indices_pdf]
         sorted_unique_patterns = unique_patterns[sorted_indices_pdf]
 
