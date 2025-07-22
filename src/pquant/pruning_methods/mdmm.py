@@ -398,7 +398,7 @@ class PACAPatternMetric:
         else:
             raise ValueError("Unsupported distance metric. Choose 'hamming', 'valued_hamming', or 'cosine'.")
 
-        return distances
+        return w_kernels, distances
 
     def __call__(self, weight):
         # This method focuses solely on calculating the penalty.
@@ -409,9 +409,11 @@ class PACAPatternMetric:
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         self._select_dominant_patterns(weight)
-        distances = self._pattern_distances(weight)
+        w_kernels, distances = self._pattern_distances(weight)
         min_distances = ops.min(distances, axis=1)
-        return ops.sum(min_distances)
+        kernel_norms = ops.sqrt(ops.sum(ops.square(w_kernels), axis=-1))
+        weighted_penalty = ops.mean(min_distances * kernel_norms)
+        return weighted_penalty
 
     def apply_projection_mask(self, weight):
         """
@@ -422,7 +424,7 @@ class PACAPatternMetric:
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 
-        distances = self._pattern_distances(weight)
+        _, distances = self._pattern_distances(weight)
         closest_indices = ops.argmin(distances, axis=1)
         closest_patterns_flat = self.dominant_patterns[closest_indices]
     
