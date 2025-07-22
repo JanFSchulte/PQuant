@@ -356,11 +356,11 @@ class PACAPatternMetric:
         sorted_unique_patterns = unique_patterns[sorted_indices_pdf]
 
         cdf = ops.cumsum(sorted_pdf)
-        n_beta_raw = ops.where(cdf >= self.beta)
-        if ops.shape(n_beta_raw)[1] == 0:
+        indices_where_cdf_exceeds_beta = ops.where(cdf >= self.beta)[0]
+        if ops.shape(indices_where_cdf_exceeds_beta)[0] == 0:
             n_beta = ops.shape(cdf)[0]
         else:
-            n_beta = n_beta_raw[0][0] + 1
+            n_beta = indices_where_cdf_exceeds_beta[0] + 1
 
         num_to_keep = ops.minimum(ops.cast(n_beta, dtype='int32'), self.alpha)
         self.dominant_patterns = sorted_unique_patterns[:num_to_keep]
