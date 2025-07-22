@@ -413,8 +413,8 @@ class PACAPatternMetric:
         w_kernels, distances = self._pattern_distances(weight)
         min_distances = ops.min(distances, axis=1)
         kernel_norms = ops.sqrt(ops.sum(ops.square(w_kernels), axis=-1))
-        weighted_penalty = ops.mean(min_distances * kernel_norms)
-        return min_distances # weighted_penalty
+        weighted_penalty = ops.sum(min_distances * kernel_norms)
+        return ops.sum(min_distances) # weighted_penalty
 
     def apply_projection_mask(self, weight):
         """
