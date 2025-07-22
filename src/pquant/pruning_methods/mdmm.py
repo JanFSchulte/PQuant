@@ -315,7 +315,7 @@ class PACAPatternMetric:
 
         # Sort hashes to group identical patterns, then find unique hashes and their counts.
         sorted_hashes, sorted_indices = ops.sort(hashes), ops.argsort(hashes)
-        sorted_patterns = ops.gather(all_patterns, sorted_indices)
+        sorted_patterns = all_patterns[sorted_indices]
 
         is_different = ops.not_equal(sorted_hashes[:-1], sorted_hashes[1:])
         is_different_padded = ops.pad(is_different, [[0, 1]], constant_values=True)
@@ -323,7 +323,7 @@ class PACAPatternMetric:
         boundary_indices_flat = ops.reshape(boundary_indices, [-1])
 
         # The first pattern of each unique group gives us the unique patterns.
-        unique_patterns = ops.gather(sorted_patterns, boundary_indices_flat)
+        unique_patterns = sorted_patterns[boundary_indices_flat]
 
         # Calculate counts by finding the difference between boundary indices.
         counts_padded = ops.pad(boundary_indices_flat, [[1, 0]], constant_values=-1)
@@ -351,8 +351,8 @@ class PACAPatternMetric:
         total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
         pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
         sorted_indices_pdf = ops.argsort(pdf, direction='DESCENDING')
-        sorted_pdf = ops.gather(pdf, sorted_indices_pdf)
-        sorted_unique_patterns = ops.gather(unique_patterns, sorted_indices_pdf)
+        sorted_pdf = pdf[sorted_indices_pdf]
+        sorted_unique_patterns = unique_patterns[sorted_indices_pdf]
 
         cdf = ops.cumsum(sorted_pdf)
         n_beta_raw = ops.where(cdf >= self.beta)
@@ -420,7 +420,7 @@ class PACAPatternMetric:
 
         distances = self._pattern_distances(weight)
         closest_indices = ops.argmin(distances, axis=1)
-        closest_patterns_flat = ops.gather(self.dominant_patterns, closest_indices)
+        closest_patterns_flat = self.dominant_patterns[closest_indices]
     
         original_shape = ops.shape(weight)
         mask = ops.reshape(closest_patterns_flat, (original_shape[0], original_shape[1], original_shape[2], -1))
