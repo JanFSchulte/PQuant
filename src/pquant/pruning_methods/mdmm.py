@@ -408,7 +408,8 @@ class PACAPatternMetric:
             # For non-conv layers, return zero loss.
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
-        self._select_dominant_patterns(weight)
+        if self.dominant_patterns is None:
+            self._select_dominant_patterns(weight)
         w_kernels, distances = self._pattern_distances(weight)
         min_distances = ops.min(distances, axis=1)
         kernel_norms = ops.sqrt(ops.sum(ops.square(w_kernels), axis=-1))
