@@ -347,7 +347,8 @@ class PACAPatternMetric:
         total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
         pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
 
-        sorted_indices = ops.argsort(pdf)[::-1]
+        sorted_indices_asc = ops.argsort(pdf)
+        sorted_indices = ops.flip(sorted_indices_asc, axis=0)
         sorted_pdf = ops.take(pdf, sorted_indices)
         sorted_unique_patterns = ops.take(unique_patterns, sorted_indices, axis=0)
 
