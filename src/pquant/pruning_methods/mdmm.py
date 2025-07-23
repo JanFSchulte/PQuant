@@ -436,7 +436,7 @@ class PACAPatternMetric:
         mask = ops.reshape(closest_patterns_flat, (original_shape[0], original_shape[1], original_shape[2], -1))
 
         # Project the original weights onto the new pattern mask
-        return weight * mask
+        return mask
     
     
     
