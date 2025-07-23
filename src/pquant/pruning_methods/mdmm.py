@@ -422,6 +422,9 @@ class PACAPatternMetric:
         where each kernel's structure conforms to its assigned dominant pattern.
         "Distance-Based Pattern Projection" from the PACA paper.
         """
+        if len(ops.shape(weight)) != 4:
+            return weight
+        
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 

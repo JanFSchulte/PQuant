@@ -10,7 +10,7 @@ pruning_parameters:
   beta: 0.75
   distance_metric: "valued_hamming"
   epsilon: 1.0e-03
-  scale: 1.0e-04
+  scale: 1.0e-04 # increase this a bit
   damping: 1.0
   use_grad: false 
 
