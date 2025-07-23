@@ -416,7 +416,7 @@ class PACAPatternMetric:
         weighted_penalty = ops.sum(min_distances * kernel_norms)
         return ops.sum(min_distances) # weighted_penalty
 
-    def apply_projection_mask(self, weight):
+    def get_projection_mask(self, weight):
         """
         Finds the closest pattern for each kernel and creates a new weight tensor 
         where each kernel's structure conforms to its assigned dominant pattern.
@@ -514,18 +514,18 @@ class MDMM(keras.layers.Layer):
         
         if self.is_finetuning:
             self.penalty_loss = 0.0
-            if isinstance(self.metric_fn, PACAPatternMetric):
-                weight = self.metric_fn.apply_projection_mask(weight)
-            else:
-                weight = weight * self.get_hard_mask(weight)
+            weight = weight * self.get_hard_mask(weight)
         else:
             self.penalty_loss = self.constraint_layer(weight)
 
         return weight 
     
     def get_hard_mask(self, weight):
-        epsilon = self.config["pruning_parameters"].get("epsilon", 1e-5)
-        return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        if isinstance(self.metric_fn, PACAPatternMetric):
+            return self.metric_fn.get_projection_mask(weight)
+        else:
+            epsilon = self.config["pruning_parameters"].get("epsilon", 1e-5)
+            return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
     
     def get_layer_sparsity(self, weight):
         return ops.sum(self.get_hard_mask(weight)) / ops.size(weight) # Should this be subtracted from 1.0?
