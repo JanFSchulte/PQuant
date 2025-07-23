@@ -416,7 +416,7 @@ class PACAPatternMetric:
 
         w_kernels, distances = self._pattern_distances(weight)
         min_distances = ops.min(distances, axis=1)
-        return ops.sum(min_distances) # change this to mean
+        return ops.mean(min_distances)
 
     def get_projection_mask(self, weight):
         """
