@@ -281,6 +281,38 @@ class FPGAAwareSparsityMetric:
         num_bram_groups = ops.cast(ops.size(bram_group_norms), "float32")
         return ops.sum(ops.cast(zero_bram_groups, "float32")) / num_bram_groups
 
+
+
+from functools import lru_cache
+import numpy as np
+
+_AX = {"H": 0,   # kernel height  (kH)
+       "W": 1,   # kernel width   (kW)
+       "I": 2,   # input  channels (C_in)
+       "O": 3}   # output channels (C_out)
+
+def _layout_to_axes(layout: str):
+    if len(layout) != 4 or set(layout) != set("HWIO"):
+        raise ValueError("layout must be a permutation of 'HWIO'")
+    return tuple(_AX[ch] for ch in layout)
+
+@lru_cache(maxsize=None)
+def _perm(src: str, dst: str):
+    """
+    Constant-time (cached) permutation tuple that reorders *src*→*dst*.
+    """
+    s = _layout_to_axes(src)
+    d = _layout_to_axes(dst)
+    return tuple(s.index(ax) for ax in d) 
+
+
+def convert_conv_layout(w, src: str, dst: str = "HWIO"):
+    if src == dst:
+        return w                             
+    perm = _perm(src, dst)                     # Python‑level, cached
+    if perm == (0, 1, 2, 3):                   # identity permutation
+        return w
+    return ops.transpose(w, perm)
     
     
 class PACAPatternMetric:
@@ -291,83 +323,62 @@ class PACAPatternMetric:
         self.dominant_patterns = None
         self.projection_mask = None
 
-    def _get_kernels_and_patterns(self, w):
-        """
-        Extracts kernels and their corresponding binary patterns from a weight tensor.
-        For a Conv2D weight (kH, kW, C_in, C_out), a 'kernel' is a filter of
-        shape (kH, kW, C_in). There are C_out such kernels.
-        """
-        # Permute to (C_out, kH, kW, C_in) to group by output channel, then flatten each filter.
-        w_permuted = ops.transpose(w, (3, 0, 1, 2))
-        kernels = ops.reshape(w_permuted, (ops.shape(w)[3], -1))
-        patterns = ops.cast(ops.not_equal(kernels, 0.0), dtype=w.dtype)
-        return kernels, patterns
+    @staticmethod
+    def _get_kernels_and_patterns(w, src="OIHW"):
+        # src:
+        #   PyTorch: (out, in, kH, kW): OIHW
+        #   Keras  : (kH, kW, in, out): HWIO
+        w_permuted = convert_conv_layout(w, src="OIHW", dst="OIHW")
+        C_out, C_in, kH, kW = ops.shape(w_permuted)
+        kernels = ops.reshape(w_permuted, (C_out * C_in, -1))
+        all_patterns = ops.cast(ops.not_equal(kernels, 0.0), dtype=w.dtype)
 
-    def _get_unique_patterns_with_counts(self, all_patterns):
-        """Returns the unique patterns and their counts using keras.ops."""
-        if ops.shape(all_patterns)[0] == 0:
-            return ops.convert_to_tensor([], dtype=all_patterns.dtype), ops.convert_to_tensor([], dtype='int32')
+        return kernels, all_patterns, (C_out, C_in, kH, kW)
 
-        num_bits = ops.shape(all_patterns)[1]
-        # Use a larger dtype for powers_of_2 to avoid overflow with large kernels
-        pow_dtype = 'float64' if num_bits > 31 else 'int64'
-        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=pow_dtype))
-        hashes = ops.sum(all_patterns * ops.cast(powers_of_2, all_patterns.dtype), axis=1)
+    @staticmethod
+    def _get_unique_patterns_with_counts(all_patterns):
+        """Returns the unique patterns and their counts."""
+        np_patterns = ops.convert_to_numpy(all_patterns)
+        uniq_np, counts_np = np.unique(np_patterns, axis=0, return_counts=True)
 
-        sorted_indices = ops.argsort(hashes)
-        sorted_hashes = ops.take(hashes, sorted_indices)
-        sorted_patterns = ops.take(all_patterns, sorted_indices, axis=0)
-        
-        # Find the boundaries of unique groups in the sorted hashes
-        is_different = ops.not_equal(sorted_hashes[:-1], sorted_hashes[1:])
-        boundary_indices = ops.cast(ops.where(is_different), dtype="int32")
-        boundary_indices = ops.reshape(boundary_indices, [-1])
-
-        # Get the unique patterns by taking the first pattern of each group
-        unique_indices = ops.pad(boundary_indices + 1, [[1, 0]], constant_values=0)
-        unique_patterns = ops.take(sorted_patterns, unique_indices, axis=0)
-
-        # Calculate counts by diffing the boundary indices
-        full_boundaries = ops.pad(boundary_indices, [[1, 0]], constant_values=-1)
-        full_boundaries = ops.pad(full_boundaries, [[0, 1]], constant_values=ops.shape(sorted_hashes)[0]-1)
-        counts = full_boundaries[1:] - full_boundaries[:-1]
-
+        unique_patterns = ops.convert_to_tensor(uniq_np, dtype=all_patterns.dtype)
+        counts          = ops.convert_to_tensor(counts_np.astype("int32"), dtype="int32")
         return unique_patterns, counts
 
-
-    def _select_dominant_patterns(self, w):
+    @staticmethod
+    def _select_dominant_patterns(all_patterns, unique_patterns, counts, alpha, beta, dtype=None):
         """Selects the most frequent patterns based on alpha and beta."""
-        _, all_patterns = self._get_kernels_and_patterns(w)
-        unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
-
+        if not dtype:
+            raise ValueError("dtype must be provided")
         if ops.shape(unique_patterns)[0] == 0:
-            self.dominant_patterns = unique_patterns
-            return
+            return unique_patterns
 
-        total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
-        pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
+        total = ops.cast(ops.shape(all_patterns)[0], dtype)
+        pdf   = ops.cast(counts, dtype) / total                   
 
-        sorted_indices_asc = ops.argsort(pdf)
-        sorted_indices = ops.flip(sorted_indices_asc, axis=0)
-        sorted_pdf = ops.take(pdf, sorted_indices)
-        sorted_unique_patterns = ops.take(unique_patterns, sorted_indices, axis=0)
+        order   = ops.argsort(-pdf)                               
+        pdf_s   = ops.take(pdf, order)
+        pat_s   = ops.take(unique_patterns, order, axis=0)
 
-        cdf = ops.cumsum(sorted_pdf)
-        indices_where_cdf_exceeds_beta = ops.where(cdf >= self.beta)
-        if len(indices_where_cdf_exceeds_beta[0]) == 0:
-            n_beta = ops.shape(cdf)[0]
-        else:
-            n_beta = indices_where_cdf_exceeds_beta[0][0] + 1
+        cdf     = ops.cumsum(pdf_s)                               
+        mask    = cdf >= beta                                      
+        has_hit = ops.any(mask)                                     
 
-        num_to_keep = ops.minimum(ops.cast(n_beta, dtype='int32'), self.alpha)
-        self.dominant_patterns = sorted_unique_patterns[:num_to_keep]
+        idx      = ops.argmax(mask)                                
+        n_beta   = ops.cast(idx + 1, counts.dtype)                  
+        n_total  = ops.cast(ops.shape(cdf)[0], counts.dtype)
+
+        keep_beta = ops.where(has_hit, n_beta, n_total)           
+        keep      = ops.minimum(keep_beta, ops.cast(alpha, counts.dtype))
+
+        return pat_s[:keep]                                       
 
     def _pattern_distances(self, w):
         """Calculates the distance of all kernels to the set of dominant patterns."""
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 
-        w_kernels, w_patterns = self._get_kernels_and_patterns(w)
+        w_kernels, w_patterns, _ = self._get_kernels_and_patterns(w)
         w_kernels_exp = ops.expand_dims(w_kernels, 1)
         w_patterns_exp = ops.expand_dims(w_patterns, 1)
         dom_patterns_exp = ops.expand_dims(self.dominant_patterns, 0)
@@ -394,7 +405,10 @@ class PACAPatternMetric:
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         if self.dominant_patterns is None:
-            self._select_dominant_patterns(weight)
+            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight)
+            unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
+            self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
+                                                                    alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
 
         if self.dominant_patterns is None or self.dominant_patterns.shape[0] == 0:
              return ops.convert_to_tensor(0.0, dtype=weight.dtype)
@@ -411,7 +425,10 @@ class PACAPatternMetric:
             return ops.ones_like(weight)
 
         if self.dominant_patterns is None:
-            self._select_dominant_patterns(weight)
+            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight)
+            unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
+            self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
+                                                                    alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
 
         if self.dominant_patterns is None or ops.shape(self.dominant_patterns)[0] == 0:
             return ops.ones_like(weight)
