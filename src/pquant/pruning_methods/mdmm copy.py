@@ -284,89 +284,101 @@ class FPGAAwareSparsityMetric:
     
     
 class PACAPatternMetric:
+    # TODO: 
+    # Make the loss contniuous ...not boolean mask usage instead think of a way to use the vake of the weighst and tehir distance
+    # In the finetuning step we will make the maks freeze and have the model train with the frozen patterns
     def __init__(self, num_patterns_to_keep=16, beta=0.75, distance_metric='valued_hamming'):
+        """Initializes the PatternPruning manager."""
         self.alpha = num_patterns_to_keep
         self.beta = beta
         self.distance_metric = distance_metric
-        self.dominant_patterns = None
-        self.projection_mask = None
+        self.dominant_patterns = None # Lazily initialized
+        self.projection_mask = None # used for finetuning (freezing pattern to dominant pattern by closest dist)
+        
+    def _get_patterns_from_weights(self, w):
+        """Gets the binary mask (pattern) of non-zero weights in each kernel."""
+        # Implements the T(.) function from the PACA paper.
+        w_reshaped = ops.reshape(w, (-1, ops.shape(w)[-2], ops.shape(w)[-1]))
+        patterns = ops.cast(ops.not_equal(w_reshaped, 0.0), dtype=w.dtype)
+        return ops.reshape(patterns, (-1, ops.shape(w)[-2] * ops.shape(w)[-1]))
 
-    def _get_kernels_and_patterns(self, w):
-        """
-        Extracts kernels and their corresponding binary patterns from a weight tensor.
-        For a Conv2D weight (kH, kW, C_in, C_out), a 'kernel' is a filter of
-        shape (kH, kW, C_in). There are C_out such kernels.
-        """
-        # Permute to (C_out, kH, kW, C_in) to group by output channel, then flatten each filter.
-        w_permuted = ops.transpose(w, (3, 0, 1, 2))
-        kernels = ops.reshape(w_permuted, (ops.shape(w)[3], -1))
-        patterns = ops.cast(ops.not_equal(kernels, 0.0), dtype=w.dtype)
-        return kernels, patterns
-
+        
     def _get_unique_patterns_with_counts(self, all_patterns):
-        """Returns the unique patterns and their counts using keras.ops."""
+        """Returns the unique patterns and their counts using unique int hashes."""
         if ops.shape(all_patterns)[0] == 0:
             return ops.convert_to_tensor([], dtype=all_patterns.dtype), ops.convert_to_tensor([], dtype='int32')
 
+        # Create integer hashes for each pattern for efficient unique counting.
         num_bits = ops.shape(all_patterns)[1]
-        # Use a larger dtype for powers_of_2 to avoid overflow with large kernels
-        pow_dtype = 'float64' if num_bits > 31 else 'int64'
-        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=pow_dtype))
-        hashes = ops.sum(all_patterns * ops.cast(powers_of_2, all_patterns.dtype), axis=1)
+        device = all_patterns.device
+        powers_of_2 = ops.power(2.0, ops.arange(num_bits, dtype=all_patterns.dtype)).to(device)
 
-        sorted_indices = ops.argsort(hashes)
-        sorted_hashes = ops.take(hashes, sorted_indices)
-        sorted_patterns = ops.take(all_patterns, sorted_indices, axis=0)
         
-        # Find the boundaries of unique groups in the sorted hashes
+        hashes = ops.sum(all_patterns * powers_of_2, axis=1)
+
+        # Sort hashes to group identical patterns, then find unique hashes and their counts.
+        sorted_hashes, sorted_indices = ops.sort(hashes), ops.argsort(hashes)
+        sorted_patterns = all_patterns[sorted_indices]
+
         is_different = ops.not_equal(sorted_hashes[:-1], sorted_hashes[1:])
-        boundary_indices = ops.cast(ops.where(is_different), dtype="int32")
-        boundary_indices = ops.reshape(boundary_indices, [-1])
+        is_different_padded = ops.pad(is_different, [[0, 1]], constant_values=True)
+        boundary_indices = ops.cast(ops.where(is_different_padded), dtype="int32")
+        boundary_indices_flat = ops.reshape(boundary_indices, [-1])
 
-        # Get the unique patterns by taking the first pattern of each group
-        unique_indices = ops.pad(boundary_indices + 1, [[1, 0]], constant_values=0)
-        unique_patterns = ops.take(sorted_patterns, unique_indices, axis=0)
+        # The first pattern of each unique group gives us the unique patterns.
+        unique_patterns = sorted_patterns[boundary_indices_flat]
 
-        # Calculate counts by diffing the boundary indices
-        full_boundaries = ops.pad(boundary_indices, [[1, 0]], constant_values=-1)
-        full_boundaries = ops.pad(full_boundaries, [[0, 1]], constant_values=ops.shape(sorted_hashes)[0]-1)
-        counts = full_boundaries[1:] - full_boundaries[:-1]
+        # Calculate counts by finding the difference between boundary indices.
+        counts_padded = ops.pad(boundary_indices_flat, [[1, 0]], constant_values=-1)
+        counts = boundary_indices_flat - counts_padded[1:]
 
         return unique_patterns, counts
 
-
+    
     def _select_dominant_patterns(self, w):
-        """Selects the most frequent patterns based on alpha and beta."""
-        _, all_patterns = self._get_kernels_and_patterns(w)
-        unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
+        """
+        Implements the "PDF-aware pattern set formulation" from the PACA paper.
+        This selects the most important patterns based on their frequency and a cumulative probability threshold.
+        (based on the 'alpha' and 'beta' hyperparameters)
+        """
+        all_patterns = self._get_patterns_from_weights(w)
 
+        # Get unique patterns and their frequencies from the new helper function.
+        unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
+        
         if ops.shape(unique_patterns)[0] == 0:
             self.dominant_patterns = unique_patterns
             return
 
+        # Calculate PDF and select top patterns based on alpha and beta.
         total_patterns = ops.cast(ops.shape(all_patterns)[0], dtype=w.dtype)
         pdf = ops.cast(counts, dtype=w.dtype) / total_patterns
-
-        sorted_indices = ops.argsort(pdf)[::-1]
-        sorted_pdf = ops.take(pdf, sorted_indices)
-        sorted_unique_patterns = ops.take(unique_patterns, sorted_indices, axis=0)
+        sorted_indices_pdf_asc = ops.argsort(pdf)
+        sorted_indices_pdf = ops.flip(sorted_indices_pdf_asc, axis=0) # Sort in descending order
+        sorted_pdf = pdf[sorted_indices_pdf]
+        sorted_unique_patterns = unique_patterns[sorted_indices_pdf]
 
         cdf = ops.cumsum(sorted_pdf)
-        indices_where_cdf_exceeds_beta = ops.where(cdf >= self.beta)
-        if len(indices_where_cdf_exceeds_beta[0]) == 0:
+        indices_where_cdf_exceeds_beta = ops.where(cdf >= self.beta)[0]
+        if ops.shape(indices_where_cdf_exceeds_beta)[0] == 0:
             n_beta = ops.shape(cdf)[0]
         else:
-            n_beta = indices_where_cdf_exceeds_beta[0][0] + 1
+            n_beta = indices_where_cdf_exceeds_beta[0] + 1
 
         num_to_keep = ops.minimum(ops.cast(n_beta, dtype='int32'), self.alpha)
         self.dominant_patterns = sorted_unique_patterns[:num_to_keep]
-
+    
     def _pattern_distances(self, w):
-        """Calculates the distance of all kernels to the set of dominant patterns."""
+        """
+        Calculates the distance of all kernels to the set of dominant patterns using one of the
+        three distance functions from the PACA paper.
+        """
+        # TODO to "Make the loss continuous...use the value of the weights and their distance".
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 
-        w_kernels, w_patterns = self._get_kernels_and_patterns(w)
+        w_patterns = self._get_patterns_from_weights(w)
+        w_kernels = ops.reshape(w, (-1, ops.shape(w)[-2] * ops.shape(w)[-1]))
         w_kernels_exp = ops.expand_dims(w_kernels, 1)
         w_patterns_exp = ops.expand_dims(w_patterns, 1)
         dom_patterns_exp = ops.expand_dims(self.dominant_patterns, 0)
@@ -384,48 +396,46 @@ class PACAPatternMetric:
             cosine_similarity = k_dot_projected / (norm_k * norm_projected + keras.backend.epsilon())
             distances = 1.0 - cosine_similarity
         else:
-            raise ValueError(f"Unsupported distance metric: {self.distance_metric}")
+            raise ValueError("Unsupported distance metric. Choose 'hamming', 'valued_hamming', or 'cosine'.")
 
         return w_kernels, distances
 
     def __call__(self, weight):
+        # This method focuses solely on calculating the penalty.
+        # The fine-tuning logic (applying the mask) is handled by the `MDMM` layer, which will call
+        # `freeze_patterns` at the appropriate time. This separation of concerns is better design.
         if len(weight.shape) != 4:
+            # For non-conv layers, return zero loss.
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         if self.dominant_patterns is None:
             self._select_dominant_patterns(weight)
-
-        if self.dominant_patterns is None or self.dominant_patterns.shape[0] == 0:
-             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
-
         w_kernels, distances = self._pattern_distances(weight)
         min_distances = ops.min(distances, axis=1)
-        return ops.sum(min_distances)
+        kernel_norms = ops.sqrt(ops.sum(ops.square(w_kernels), axis=-1))
+        weighted_penalty = ops.sum(min_distances * kernel_norms)
+        return ops.sum(min_distances) # weighted_penalty
 
     def get_projection_mask(self, weight):
         """
-        Creates a binary mask by assigning each kernel to its closest dominant pattern.
+        Finds the closest pattern for each kernel and creates a new weight tensor 
+        where each kernel's structure conforms to its assigned dominant pattern.
+        "Distance-Based Pattern Projection" from the PACA paper.
         """
         if len(ops.shape(weight)) != 4:
-            return ops.ones_like(weight)
-
+            return weight
+        
         if self.dominant_patterns is None:
-            self._select_dominant_patterns(weight)
-
-        if self.dominant_patterns is None or ops.shape(self.dominant_patterns)[0] == 0:
-            return ops.ones_like(weight)
+            raise ValueError("Dominant patterns have not been selected yet.")
 
         _, distances = self._pattern_distances(weight)
         closest_indices = ops.argmin(distances, axis=1)
-        # closest_patterns_flat has shape (C_out, kH * kW * C_in)
-        closest_patterns_flat = ops.take(self.dominant_patterns, closest_indices, axis=0)
+        closest_patterns_flat = self.dominant_patterns[closest_indices]
+    
+        original_shape = ops.shape(weight)
+        mask = ops.reshape(closest_patterns_flat, (original_shape[0], original_shape[1], original_shape[2], -1))
 
-        # Reshape the flat patterns back to the original weight's 4D shape
-        C_out, kH, kW, C_in = ops.shape(weight)[3], ops.shape(weight)[0], ops.shape(weight)[1], ops.shape(weight)[2]
-        # First, reshape to the pattern's logical layout: (C_out, kH, kW, C_in)
-        mask_reshaped = ops.reshape(closest_patterns_flat, (C_out, kH, kW, C_in))
-        # Then, transpose to match the Keras kernel format: (kH, kW, C_in, C_out)
-        mask = ops.transpose(mask_reshaped, (1, 2, 3, 0))
+        # Project the original weights onto the new pattern mask
         return mask
     
     
