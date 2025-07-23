@@ -455,6 +455,7 @@ class MDMM(keras.layers.Layer):
         self.penalty_loss = None
         self.built = False
         self.is_finetuning = False
+        self.mask_frozen = False
     
     def build(self, input_shape):
         metric_type = self.config["pruning_parameters"].get("metric_type", "UnstructuredSparsity")
@@ -505,6 +506,14 @@ class MDMM(keras.layers.Layer):
         
         self.mask = ops.ones(input_shape)
         self.constraint_layer.build(input_shape)
+        
+        self.frozen_mask = self.add_weight(
+            name='frozen_mask',
+            shape=input_shape,
+            initializer='ones',
+            trainable=False
+        )
+        
         super().build(input_shape)
         self.built = True
                     
@@ -513,8 +522,12 @@ class MDMM(keras.layers.Layer):
             self.build(weight.shape)
         
         if self.is_finetuning:
+            if not self.mask_frozen:
+                final_mask = self.get_hard_mask(weight)
+                self.frozen_mask.assign(final_mask)
+                self.mask_frozen = True
             self.penalty_loss = 0.0
-            weight = weight * self.get_hard_mask(weight)
+            weight = weight * self.frozen_mask
         else:
             self.penalty_loss = self.constraint_layer(weight)
 
