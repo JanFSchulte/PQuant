@@ -322,6 +322,7 @@ class PACAPatternMetric:
         self.distance_metric = distance_metric
         self.dominant_patterns = None
         self.projection_mask = None
+        self.src = "OIHW"
 
     @staticmethod
     def _get_kernels_and_patterns(w, src="OIHW"):
@@ -378,7 +379,7 @@ class PACAPatternMetric:
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 
-        w_kernels, w_patterns, _ = self._get_kernels_and_patterns(w)
+        w_kernels, w_patterns, _ = self._get_kernels_and_patterns(w, self.src)
         w_kernels_exp = ops.expand_dims(w_kernels, 1)
         w_patterns_exp = ops.expand_dims(w_patterns, 1)
         dom_patterns_exp = ops.expand_dims(self.dominant_patterns, 0)
@@ -405,7 +406,7 @@ class PACAPatternMetric:
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         if self.dominant_patterns is None:
-            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight)
+            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
             unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
             self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
                                                                     alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
@@ -425,7 +426,7 @@ class PACAPatternMetric:
             return ops.ones_like(weight)
 
         if self.dominant_patterns is None:
-            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight)
+            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
             unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
             self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
                                                                     alpha = self.alpha, beta = self.beta, dtype=weight.dtype)

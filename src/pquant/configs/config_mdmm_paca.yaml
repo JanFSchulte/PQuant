@@ -8,7 +8,7 @@ pruning_parameters:
   metric_type: "PACAPatternSparsity"
   num_patterns_to_keep: 16
   beta: 0.75
-  distance_metric: "valued_hamming"
+  distance_metric: "cosine"
   epsilon: 1.0e-03
   scale: 3.0e-04 # increase this a bit
   damping: 1.0
