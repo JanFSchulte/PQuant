@@ -428,7 +428,7 @@ class PACAPatternMetric:
     def _get_projection_mask(self, weight):
         if len(ops.shape(weight)) != 4:
             return ops.ones_like(weight)
-        _, _, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
+        _, _, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src, epsilon=0.0)
         _, distances = self._pattern_distances(weight) # Shape: (C_out*C_in, num_dominant)
         closest_pattern_indices = ops.argmin(distances, axis=1) # Shape: (C_out*C_in,)
         projection_mask_flat = ops.take(self.dominant_patterns, closest_pattern_indices, axis=0)
