@@ -406,7 +406,7 @@ class PACAPatternMetric:
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         if self.dominant_patterns is None:
-            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
+            _, all_patterns, _ = self._get_kernels_and_patterns(weight, self.src)
             unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
             self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
                                                                     alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
@@ -419,38 +419,19 @@ class PACAPatternMetric:
         return ops.mean(min_distances)
 
     def get_projection_mask(self, weight):
-        """
-        Creates a binary mask by assigning each kernel to its closest dominant pattern.
-        """
-        if len(ops.shape(weight)) != 4:
-            return ops.ones_like(weight)
+        if self.projection_mask is None:
+            self.projection_mask = self._get_projection_mask(weight)
+        return self.projection_mask
 
-        if self.dominant_patterns is None:
-            kernels, all_patterns, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
-            unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
-            self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
-                                                                    alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
-
-        if self.dominant_patterns is None or ops.shape(self.dominant_patterns)[0] == 0:
-            return ops.ones_like(weight)
-
-        _, distances = self._pattern_distances(weight)
-        closest_indices = ops.argmin(distances, axis=1)
-        # closest_patterns_flat has shape (C_out, kH * kW * C_in)
-        closest_patterns_flat = ops.take(self.dominant_patterns, closest_indices, axis=0)
-
-        # Reshape the flat patterns back to the original weight's 4D shape
-        C_out, kH, kW, C_in = ops.shape(weight)[3], ops.shape(weight)[0], ops.shape(weight)[1], ops.shape(weight)[2]
-        # First, reshape to the pattern's logical layout: (C_out, kH, kW, C_in)
-        mask_reshaped = ops.reshape(closest_patterns_flat, (C_out, kH, kW, C_in))
-        # Then, transpose to match the Keras kernel format: (kH, kW, C_in, C_out)
-        mask = ops.transpose(mask_reshaped, (1, 2, 3, 0))
-        return mask
-    
-    def project_kernels_to_dom_patterns(self, weight):
-    
-    
-    
+    def _get_projection_mask(self, weight):
+        _, _, (C_out, C_in, kH, kW) = self._get_kernels_and_patterns(weight, self.src)
+        _, distances = self._pattern_distances(weight) # Shape: (C_out*C_in, num_dominant)
+        closest_pattern_indices = ops.argmin(distances, axis=1) # Shape: (C_out*C_in,)
+        projection_mask_flat = ops.take(self.dominant_patterns, closest_pattern_indices, axis=0)
+        projection_mask =  ops.reshape(projection_mask_flat, (C_out, C_in, kH, kW))
+        # 8. Reshape the flat mask back to the original 4D weight format
+        return projection_mask
+            
 #-------------------------------------------------------------------
 #                   MDMM Layer
 #-------------------------------------------------------------------
@@ -465,7 +446,6 @@ class MDMM(keras.layers.Layer):
         self.penalty_loss = None
         self.built = False
         self.is_finetuning = False
-        self.mask_frozen = False
     
     def build(self, input_shape):
         metric_type = self.config["pruning_parameters"].get("metric_type", "UnstructuredSparsity")
@@ -516,13 +496,7 @@ class MDMM(keras.layers.Layer):
         
         self.mask = ops.ones(input_shape)
         self.constraint_layer.build(input_shape)
-        
-        self.frozen_mask = self.add_weight(
-            name='frozen_mask',
-            shape=input_shape,
-            initializer='ones',
-            trainable=False
-        )
+
         
         super().build(input_shape)
         self.built = True
@@ -532,12 +506,9 @@ class MDMM(keras.layers.Layer):
             self.build(weight.shape)
         
         if self.is_finetuning:
-            if not self.mask_frozen:
-                final_mask = self.get_hard_mask(weight)
-                self.frozen_mask.assign(final_mask)
-                self.mask_frozen = True
             self.penalty_loss = 0.0
-            weight = weight * self.frozen_mask
+            self.mask = self.get_hard_mask(weight)
+            weight = weight * self.mask
         else:
             self.penalty_loss = self.constraint_layer(weight)
 
