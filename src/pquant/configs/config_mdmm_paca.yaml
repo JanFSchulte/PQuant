@@ -10,7 +10,7 @@ pruning_parameters:
   beta: 0.99
   distance_metric: "cosine"
   epsilon: 1.0e-03
-  scale: 3.0e-04 # increase this a bit
+  scale: 1.0 # increase this a bit
   damping: 1.0
   use_grad: false 
 
