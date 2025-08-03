@@ -316,23 +316,25 @@ def convert_conv_layout(w, src: str, dst: str = "HWIO"):
     
     
 class PACAPatternMetric:
-    def __init__(self, num_patterns_to_keep=16, beta=0.75, distance_metric='valued_hamming'):
+    def __init__(self, num_patterns_to_keep=16, beta=0.75, 
+                 epsilon=1e-5, distance_metric='valued_hamming'):
         self.alpha = num_patterns_to_keep
         self.beta = beta
         self.distance_metric = distance_metric
+        self.epsilon = epsilon
         self.dominant_patterns = None
         self.projection_mask = None
         self.src = "OIHW"
 
     @staticmethod
-    def _get_kernels_and_patterns(w, src="OIHW"):
+    def _get_kernels_and_patterns(w, src="OIHW", epsilon=1e-5):
         # src:
         #   PyTorch: (out, in, kH, kW): OIHW
         #   Keras  : (kH, kW, in, out): HWIO
         w_permuted = convert_conv_layout(w, src="OIHW", dst="OIHW")
         C_out, C_in, kH, kW = ops.shape(w_permuted)
         kernels = ops.reshape(w_permuted, (C_out * C_in, -1))
-        all_patterns = ops.cast(ops.not_equal(kernels, 0.0), dtype=w.dtype)
+        all_patterns = ops.cast(ops.greater_equal(ops.abs(kernels), epsilon), dtype=w.dtype)
 
         return kernels, all_patterns, (C_out, C_in, kH, kW)
 
@@ -431,7 +433,6 @@ class PACAPatternMetric:
         closest_pattern_indices = ops.argmin(distances, axis=1) # Shape: (C_out*C_in,)
         projection_mask_flat = ops.take(self.dominant_patterns, closest_pattern_indices, axis=0)
         projection_mask =  ops.reshape(projection_mask_flat, (C_out, C_in, kH, kW))
-        # 8. Reshape the flat mask back to the original 4D weight format
         return projection_mask
             
 #-------------------------------------------------------------------
@@ -473,6 +474,7 @@ class MDMM(keras.layers.Layer):
             self.metric_fn = PACAPatternMetric(
                 num_patterns_to_keep=self.config["pruning_parameters"].get("num_patterns_to_keep", 16),
                 beta=self.config["pruning_parameters"].get("beta", 0.75),
+                epsilon=self.config["pruning_parameters"].get("epsilon", 1e-5),
                 distance_metric=self.config["pruning_parameters"].get("distance_metric", "valued_hamming")
             )
         else:
