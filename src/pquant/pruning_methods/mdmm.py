@@ -441,7 +441,7 @@ class PACAPatternMetric:
         
         projection_mask = self.projection_mask
         projected_weight = (weight + self.epsilon) * projection_mask
-        _, all_patterns, _ = self._get_kernels_and_patterns(projected_weight, 
+        _, all_patterns, _ = self._get_kernels_and_patterns(projection_mask, 
                                                             self.src, epsilon=self.epsilon)
         unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
         
