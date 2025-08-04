@@ -334,7 +334,7 @@ class PACAPatternMetric:
         w_permuted = convert_conv_layout(w, src="OIHW", dst="OIHW")
         C_out, C_in, kH, kW = ops.shape(w_permuted)
         kernels = ops.reshape(w_permuted, (C_out * C_in, -1))
-        all_patterns = ops.cast(ops.greater_equal(ops.abs(kernels), epsilon), dtype=w.dtype)
+        all_patterns = ops.cast(ops.greater(ops.abs(kernels), epsilon), dtype=w.dtype)
 
         return kernels, all_patterns, (C_out, C_in, kH, kW)
 
