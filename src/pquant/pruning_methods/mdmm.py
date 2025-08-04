@@ -523,7 +523,7 @@ class MDMM(keras.layers.Layer):
         
         if self.is_finetuning:
             self.penalty_loss = 0.0
-            if self.metric_fn is PACAPatternMetric:
+            if isinstance(self.metric_fn, PACAPatternMetric):
                 self.mask = self.metric_fn.get_projection_mask(weight)
             weight = weight * self.mask
         else:
