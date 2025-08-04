@@ -523,7 +523,8 @@ class MDMM(keras.layers.Layer):
         
         if self.is_finetuning:
             self.penalty_loss = 0.0
-            self.mask = self.get_projection_mask(weight)
+            if self.metric_fn is PACAPatternMetric:
+                self.mask = self.metric_fn.get_projection_mask(weight)
             weight = weight * self.mask
         else:
             self.penalty_loss = self.constraint_layer(weight)
@@ -535,7 +536,8 @@ class MDMM(keras.layers.Layer):
     
     def get_layer_sparsity(self, weight):
         epsilon = self.config["pruning_parameters"].get("epsilon", 1e-5)
-        return ops.sum(ops.cast(ops.abs(weight) > epsilon, weight.dtype)) / ops.size(weight) # Should this be subtracted from 1.0?
+        sparse_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        return ops.sum(sparse_mask) / ops.size(weight) # Should this be subtracted from 1.0?
 
     def calculate_additional_loss(self):
         if self.penalty_loss is None:
@@ -553,6 +555,7 @@ class MDMM(keras.layers.Layer):
         # Freeze the weights
         # Set lmbda(s) to zero
         self.is_finetuning = True
+        
         if hasattr(self.constraint_layer, 'module'):
             self.constraint_layer.module.turn_off()
         else:
