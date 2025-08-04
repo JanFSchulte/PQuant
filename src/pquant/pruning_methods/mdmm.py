@@ -434,18 +434,6 @@ class PACAPatternMetric:
         projection_mask_flat = ops.take(self.dominant_patterns, closest_pattern_indices, axis=0)
         projection_mask =  ops.reshape(projection_mask_flat, (C_out, C_in, kH, kW))
         return projection_mask
-
-    def _pseudo_get_unique_patterns_with_counts(self, weight):
-        if self.projection_mask is None:
-            raise ValueError("Projection mask has not been selected yet.")
-        
-        projection_mask = self.projection_mask
-        # projected_weight = (weight + 2*self.epsilon) * projection_mask
-        _, all_patterns, _ = self._get_kernels_and_patterns(projection_mask, 
-                                                            self.src, epsilon=0.0)
-        unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
-        
-        return unique_patterns, counts
             
 #-------------------------------------------------------------------
 #                   MDMM Layer
