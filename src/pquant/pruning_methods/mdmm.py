@@ -437,9 +437,9 @@ class PACAPatternMetric:
 
     def _pseudo_get_unique_patterns_with_counts(self, weight):
         if self.projection_mask is None:
-            projection_mask = ops.ones_like(weight)
-        else:
-            projection_mask = self.projection_mask
+            raise ValueError("Projection mask has not been selected yet.")
+        
+        projection_mask = self.projection_mask
         projected_weight = ops.ones_like(weight) * projection_mask
         _, all_patterns, _ = self._get_kernels_and_patterns(projected_weight, self.src, epsilon=0.0)
         unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
