@@ -381,7 +381,7 @@ class PACAPatternMetric:
         if self.dominant_patterns is None:
             raise ValueError("Dominant patterns have not been selected yet.")
 
-        w_kernels, w_patterns, _ = self._get_kernels_and_patterns(w, self.src)
+        w_kernels, w_patterns, _ = self._get_kernels_and_patterns(w, self.src, self.epsilon)
         w_kernels_exp = ops.expand_dims(w_kernels, 1)
         w_patterns_exp = ops.expand_dims(w_patterns, 1)
         dom_patterns_exp = ops.expand_dims(self.dominant_patterns, 0)
@@ -408,7 +408,7 @@ class PACAPatternMetric:
             return ops.convert_to_tensor(0.0, dtype=weight.dtype)
 
         if self.dominant_patterns is None:
-            _, all_patterns, _ = self._get_kernels_and_patterns(weight, self.src)
+            _, all_patterns, _ = self._get_kernels_and_patterns(weight, self.src, self.epsilon)
             unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
             self.dominant_patterns = self._select_dominant_patterns(all_patterns, unique_patterns, counts, 
                                                                     alpha = self.alpha, beta = self.beta, dtype=weight.dtype)
@@ -440,8 +440,9 @@ class PACAPatternMetric:
             raise ValueError("Projection mask has not been selected yet.")
         
         projection_mask = self.projection_mask
-        projected_weight = ops.ones_like(weight) * projection_mask
-        _, all_patterns, _ = self._get_kernels_and_patterns(projected_weight, self.src, epsilon=0.0)
+        projected_weight = (weight + self.epsilon) * projection_mask
+        _, all_patterns, _ = self._get_kernels_and_patterns(projected_weight, 
+                                                            self.src, epsilon=self.epsilon)
         unique_patterns, counts = self._get_unique_patterns_with_counts(all_patterns)
         
         return unique_patterns, counts
