@@ -282,7 +282,7 @@ class FPGAAwareSparsityMetric:
         return ops.sum(ops.cast(zero_bram_groups, "float32")) / num_bram_groups
 
 
-from utils import patterns
+from .utils import patterns
     
 class PACAPatternMetric:
     def __init__(self, num_patterns_to_keep=16, beta=0.75, 
