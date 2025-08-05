@@ -9,6 +9,7 @@ pruning_parameters:
   num_patterns_to_keep: 16
   beta: 0.85
   distance_metric: "cosine"
+  src: "OIHW"
   epsilon: 1.0e-03
   scale: 1.0 # increase this a bit
   damping: 1.0
