@@ -108,4 +108,17 @@ def _pattern_distances(w, dominant_patterns, src="OIHW", epsilon=1e-5, distance_
     else:
         raise ValueError(f"Unsupported distance metric: {distance_metric}")
 
-    return w_kernels, distances                                     
+    return w_kernels, distances         
+
+def _get_projection_mask(weight,dominant_patterns, src="OIHW", epsilon=1e-5, distance_metric='cosine'):
+    if len(ops.shape(weight)) != 4:
+        return ops.ones_like(weight)
+    _, _, (C_out, C_in, kH, kW) = _get_kernels_and_patterns(weight, src, epsilon=0.0)
+    _, distances = _pattern_distances(weight, dominant_patterns, 
+                                        src, 
+                                        epsilon, 
+                                        distance_metric) # Shape: (C_out*C_in, num_dominant)
+    closest_pattern_indices = ops.argmin(distances, axis=1) # Shape: (C_out*C_in,)
+    projection_mask_flat = ops.take(dominant_patterns, closest_pattern_indices, axis=0)
+    projection_mask =  ops.reshape(projection_mask_flat, (C_out, C_in, kH, kW))
+    return projection_mask                            

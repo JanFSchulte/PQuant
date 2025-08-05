@@ -317,21 +317,10 @@ class PACAPatternMetric:
 
     def get_projection_mask(self, weight):
         if self.projection_mask is None:
-            self.projection_mask = self._get_projection_mask(weight)
+            self.projection_mask = patterns._get_projection_mask(weight)
         return self.projection_mask
 
-    def _get_projection_mask(self, weight):
-        if len(ops.shape(weight)) != 4:
-            return ops.ones_like(weight)
-        _, _, (C_out, C_in, kH, kW) = patterns._get_kernels_and_patterns(weight, self.src, epsilon=0.0)
-        _, distances = patterns._pattern_distances(weight, self.dominant_patterns, 
-                                                           self.src, 
-                                                           self.epsilon, 
-                                                           self.distance_metric) # Shape: (C_out*C_in, num_dominant)
-        closest_pattern_indices = ops.argmin(distances, axis=1) # Shape: (C_out*C_in,)
-        projection_mask_flat = ops.take(self.dominant_patterns, closest_pattern_indices, axis=0)
-        projection_mask =  ops.reshape(projection_mask_flat, (C_out, C_in, kH, kW))
-        return projection_mask
+    
             
 #-------------------------------------------------------------------
 #                   MDMM Layer
