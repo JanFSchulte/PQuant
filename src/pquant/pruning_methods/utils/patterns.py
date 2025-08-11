@@ -82,6 +82,28 @@ def _select_dominant_patterns(all_patterns, unique_patterns, counts, alpha, beta
 
     return pat_s[:keep]  
 
+def _distances_P1_P2(P1, P2, distance_metric='cosine'): 
+    """Distances between set of patterns P1 and P2."""
+    P1s_exp = ops.expand_dims(P1, 1)
+    P2s_exp = ops.expand_dims(P2, 0)
+    
+    if distance_metric == 'hamming':
+        distances = ops.sum(ops.abs(P1s_exp - P2s_exp), axis=-1)
+    elif distance_metric == 'valued_hamming':
+        abs_diff = ops.abs(P1s_exp - P2s_exp)
+        distances = ops.sum(abs_diff * ops.abs(P2s_exp), axis=-1)
+    elif distance_metric == 'cosine':
+        projected_kernels = P2s_exp * P1s_exp
+        k_dot_projected = ops.sum(P2s_exp * projected_kernels, axis=-1)
+        norm_k = ops.norm(P2s_exp, axis=-1)
+        norm_projected = ops.norm(projected_kernels, axis=-1)
+        cosine_similarity = k_dot_projected / (norm_k * norm_projected + keras.backend.epsilon())
+        distances = 1.0 - cosine_similarity
+    else:
+        raise ValueError(f"Unsupported distance metric: {distance_metric}")
+    
+    return distances
+    
 
 def _pattern_distances(w, dominant_patterns, src="OIHW", epsilon=1e-5, distance_metric='cosine'):
     """Calculates the distance of all kernels to the set of dominant patterns."""
