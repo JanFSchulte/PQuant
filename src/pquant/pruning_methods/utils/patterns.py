@@ -82,20 +82,25 @@ def _select_dominant_patterns(all_patterns, unique_patterns, counts, alpha, beta
 
     return pat_s[:keep]  
 
-def _distances_P1_P2(P1, P2, distance_metric='cosine'): 
-    """Distances between set of patterns P1 and P2."""
-    P1s_exp = ops.expand_dims(P1, 1)
-    P2s_exp = ops.expand_dims(P2, 0)
+def calc_pattern_distances(Tk, P, k, distance_metric='cosine'):
+    """
+    Compute distances between a set of target kernels Tk and a set of patterns P,
+    using the specified distance metric.
+    """
+    Tk_exp = ops.expand_dims(Tk, 1)
+    k_exp = ops.expand_dims(k, 1)
+    P_exp = ops.expand_dims(P, 0)
+    
     
     if distance_metric == 'hamming':
-        distances = ops.sum(ops.abs(P1s_exp - P2s_exp), axis=-1)
+        distances = ops.sum(ops.abs(Tk_exp - P_exp), axis=-1)
     elif distance_metric == 'valued_hamming':
-        abs_diff = ops.abs(P1s_exp - P2s_exp)
-        distances = ops.sum(abs_diff * ops.abs(P2s_exp), axis=-1)
+        abs_diff = ops.abs(Tk_exp - P_exp)
+        distances = ops.sum(abs_diff * ops.abs(k_exp), axis=-1)
     elif distance_metric == 'cosine':
-        projected_kernels = P2s_exp * P1s_exp
-        k_dot_projected = ops.sum(P2s_exp * projected_kernels, axis=-1)
-        norm_k = ops.norm(P2s_exp, axis=-1)
+        projected_kernels = k_exp * P_exp
+        k_dot_projected = ops.sum(k_exp * projected_kernels, axis=-1)
+        norm_k = ops.norm(k_exp, axis=-1)
         norm_projected = ops.norm(projected_kernels, axis=-1)
         cosine_similarity = k_dot_projected / (norm_k * norm_projected + keras.backend.epsilon())
         distances = 1.0 - cosine_similarity
@@ -103,6 +108,7 @@ def _distances_P1_P2(P1, P2, distance_metric='cosine'):
         raise ValueError(f"Unsupported distance metric: {distance_metric}")
     
     return distances
+
     
 
 def _pattern_distances(w, dominant_patterns, src="OIHW", epsilon=1e-5, distance_metric='cosine'):
@@ -111,24 +117,8 @@ def _pattern_distances(w, dominant_patterns, src="OIHW", epsilon=1e-5, distance_
         raise ValueError("Dominant patterns have not been selected yet.")
 
     w_kernels, w_patterns, _ = _get_kernels_and_patterns(w, src, epsilon)
-    w_kernels_exp = ops.expand_dims(w_kernels, 1)
-    w_patterns_exp = ops.expand_dims(w_patterns, 1)
-    dom_patterns_exp = ops.expand_dims(dominant_patterns, 0)
-
-    if distance_metric == 'hamming':
-        distances = ops.sum(ops.abs(dom_patterns_exp - w_patterns_exp), axis=-1)
-    elif distance_metric == 'valued_hamming':
-        abs_diff = ops.abs(dom_patterns_exp - w_patterns_exp)
-        distances = ops.sum(abs_diff * ops.abs(w_kernels_exp), axis=-1)
-    elif distance_metric == 'cosine':
-        projected_kernels = w_kernels_exp * dom_patterns_exp
-        k_dot_projected = ops.sum(w_kernels_exp * projected_kernels, axis=-1)
-        norm_k = ops.norm(w_kernels_exp, axis=-1)
-        norm_projected = ops.norm(projected_kernels, axis=-1)
-        cosine_similarity = k_dot_projected / (norm_k * norm_projected + keras.backend.epsilon())
-        distances = 1.0 - cosine_similarity
-    else:
-        raise ValueError(f"Unsupported distance metric: {distance_metric}")
+    distances = calc_pattern_distances(w_patterns, dominant_patterns, 
+                                       w_kernels, distance_metric)
 
     return w_kernels, distances         
 
