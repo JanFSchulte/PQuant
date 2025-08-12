@@ -316,7 +316,7 @@ class PACAPatternMetric:
 
     def get_projection_mask(self, weight):
         if self.projection_mask is None:
-            self.projection_mask = patterns._get_projection_mask(weight)
+            self.projection_mask = patterns._get_projection_mask(weight, self.dominant_patterns, self.src, self.epsilon, self.distance_metric)
         return self.projection_mask
 
     
