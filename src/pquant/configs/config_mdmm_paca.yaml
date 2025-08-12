@@ -27,7 +27,7 @@ quantization_parameters:
   use_symmetric_quantization: false
 
 training_parameters:
-  epochs: 20
+  epochs: 5
   fine_tuning_epochs: 20
   pretraining_epochs: 0
   pruning_first: false
