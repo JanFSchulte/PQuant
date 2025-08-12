@@ -41,7 +41,7 @@ def _get_kernels_and_patterns(w, src="OIHW", epsilon=1e-5):
     w_permuted = convert_conv_layout(w, src="OIHW", dst="OIHW")
     C_out, C_in, kH, kW = ops.shape(w_permuted)
     kernels = ops.reshape(w_permuted, (C_out * C_in, -1))
-    all_patterns = ops.cast(ops.greater(ops.abs(kernels), epsilon), dtype=w.dtype)
+    all_patterns = ops.cast(ops.greater(ops.abs(kernels), epsilon), dtype="uint8")
 
     return kernels, all_patterns, (C_out, C_in, kH, kW)
 
@@ -81,6 +81,24 @@ def _select_dominant_patterns(all_patterns, unique_patterns, counts, alpha, beta
     keep      = ops.minimum(keep_beta, ops.cast(alpha, counts.dtype))
 
     return pat_s[:keep]  
+
+from keras import ops
+
+def count_dominant_patterns(dominant_patterns, unique_patterns, counts):
+    """
+    Shapes:
+      dominant_patterns: [M, K]
+      unique_patterns:   [U, K]
+      counts:            [U]
+    """
+    dp_exp = ops.expand_dims(dominant_patterns, axis=1)  # [M, 1, K]
+    up_exp = ops.expand_dims(unique_patterns, axis=0)    # [1, U, K]
+    matches = ops.all(ops.equal(dp_exp, up_exp), axis=-1)  # [M, U]
+
+    idx = ops.argmax(matches, axis=1)  # [M]
+    dom_counts = ops.take(counts, idx, axis=0)  # [M]
+    return dom_counts
+
 
 def calc_pattern_distances(Tk, P, k, distance_metric='cosine'):
     """
