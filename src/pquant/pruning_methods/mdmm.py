@@ -20,7 +20,7 @@ def flip_gradient(x, scale=-1.0):
 
 
 # Abstract base class for constraints
-@keras.utils.register_keras_serializable(name = "Constraint")
+@keras.saving.register_keras_serializable(package="pquant.pruning_methods", name="Constraint")
 class Constraint(keras.layers.Layer):
     def __init__(self, lmbda_init=0.0,scale=1.0, damping=1.0, **kwargs):
         self.use_grad_ = bool(kwargs.pop("use_grad", True))
@@ -95,7 +95,7 @@ class Constraint(keras.layers.Layer):
 #               Generic Constraint Classes
 #-------------------------------------------------------------------
 
-@keras.utils.register_keras_serializable(name = "EqualityConstraint")
+@keras.saving.register_keras_serializable(package="pquant.pruning_methods", name="EqualityConstraint")
 class EqualityConstraint(Constraint):
     """Constraint for g(w) == target_value."""
     def __init__(self, metric_fn, target_value = 0.0,**kwargs):
@@ -109,7 +109,7 @@ class EqualityConstraint(Constraint):
         # return ops.abs(infeasibility)
         return infeasibility
     
-@keras.utils.register_keras_serializable(name = "LessThanOrEqualConstraint")
+@keras.saving.register_keras_serializable(package="pquant.pruning_methods", name="LessThanOrEqualConstraint")
 class LessThanOrEqualConstraint(Constraint):
     """Constraint for g(w) <= target_value."""
     def __init__(self, metric_fn, target_value = 0.0, **kwargs):
@@ -122,7 +122,7 @@ class LessThanOrEqualConstraint(Constraint):
         infeasibility = metric_value - self.target_value
         return ops.maximum(infeasibility, 0.0)
     
-@keras.utils.register_keras_serializable(name = "GreaterThanOrEqualConstraint")
+@keras.saving.register_keras_serializable(package="pquant.pruning_methods", name="GreaterThanOrEqualConstraint")
 class GreaterThanOrEqualConstraint(Constraint):
     """Constraint for g(w) >= target_value."""
     def __init__(self, metric_fn, target_value = 0.0, **kwargs):
@@ -325,7 +325,8 @@ class PACAPatternMetric:
 #-------------------------------------------------------------------
 #                   MDMM Layer
 #-------------------------------------------------------------------
-    
+
+@keras.saving.register_keras_serializable(package="pquant.pruning_methods", name="MDMM")
 class MDMM(keras.layers.Layer):
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__(*args, **kwargs)
