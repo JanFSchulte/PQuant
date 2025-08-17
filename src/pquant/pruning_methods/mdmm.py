@@ -320,7 +320,8 @@ class PACAPatternMetric:
         return self.projection_mask
 
     
-            
+    def get_dominant_patterns(self):
+        return self.dominant_patterns
 #-------------------------------------------------------------------
 #                   MDMM Layer
 #-------------------------------------------------------------------
